@@ -1,0 +1,8 @@
+backend/venv/
+backend/chroma_data/
+backend/__pycache__/
+backend/.env
+
+frontend/node_modules/
+
+*.pyc
