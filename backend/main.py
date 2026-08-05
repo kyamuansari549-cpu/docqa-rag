@@ -1,3 +1,8 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["OMP_NUM_THREADS"] = "1"
+import onnxruntime as ort
+session = ort.InferenceSession("model.onnx", providers=["CPUExecutionProvider"])
 import uuid
 from dotenv import load_dotenv
 
@@ -15,7 +20,10 @@ app = FastAPI(title="Doc Q&A (RAG)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+    "http://localhost:5173",
+    "https://YOUR_PROJECT.vercel.app",
+],
     allow_methods=["*"],
     allow_headers=["*"],
 )
