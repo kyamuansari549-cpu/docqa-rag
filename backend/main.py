@@ -1,8 +1,6 @@
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["OMP_NUM_THREADS"] = "1"
-import onnxruntime as ort
-session = ort.InferenceSession("model.onnx", providers=["CPUExecutionProvider"])
 import uuid
 from dotenv import load_dotenv
 
