@@ -6,10 +6,10 @@ thing interviewers ask you to point to in your own code.
 """
 
 import os
-from groq import Groq
+from anthropic import Anthropic
 
-_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 
 SYSTEM_PROMPT = """You are a document Q&A assistant. You answer questions using ONLY the
 numbered source excerpts provided below. Rules:
@@ -37,12 +37,10 @@ def answer_question(question: str, hits: list[dict]) -> str:
     context = _build_context(hits)
     user_message = f"Sources:\n\n{context}\n\nQuestion: {question}"
 
-    response = _client.chat.completions.create(
+    response = _client.messages.create(
         model=MODEL,
         max_tokens=1024,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}],
     )
-    return response.choices[0].message.content
+    return "".join(block.text for block in response.content if block.type == "text")
