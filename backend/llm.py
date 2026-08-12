@@ -6,10 +6,10 @@ thing interviewers ask you to point to in your own code.
 """
 
 import os
-from anthropic import Anthropic
+from groq import GROQ
 
-_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+_client = GROQ(api_key=os.getenv("GROQ_API_KEY"))
+MODEL = os.getenv("GROQ_MODEL", "GROQ_MODEL=llama-3.3-70b-versatile")
 
 SYSTEM_PROMPT = """You are a document Q&A assistant. You answer questions using ONLY the
 numbered source excerpts provided below. Rules:
