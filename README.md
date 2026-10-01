@@ -9,14 +9,14 @@ page they came from.
 ```
  Upload            Ingest             Embed              Store
 ┌──────┐   file    ┌─────────┐  text  ┌──────────┐ vector ┌─────────┐
-│  PDF │ ────────► │ pypdf    │──────► │ Gemini   │──────► │ Chroma  │
-│ /txt │           │ + chunk  │        │ embed API│        │ (local) │
+│  PDF │ ────────► │ pypdf    │──────► │ Gemini   │──────► │ SQLite  │
+│ /txt │           │ + chunk  │        │ embed API│        │ + NumPy │
 └──────┘           └─────────┘        └──────────┘        └─────────┘
 
  Ask                Retrieve             Generate
 ┌──────────┐  query ┌───────────┐  top-k ┌────────────────┐
-│ Question │ ─────► │ Chroma    │──────► │ Groq API       │──► Answer
-└──────────┘        │ similarity│  chunks│ (Llama, grounded│    + citations
+│ Question │ ─────► │ SQLite    │──────► │ Groq API       │──► Answer
+└──────────┘        │ cosine    │  chunks│ (Llama, grounded│    + citations
                      │ search    │        │  prompt)       │
                      └───────────┘        └────────────────┘
 ```
@@ -36,7 +36,7 @@ docqa-rag/
 ├── backend/
 │   ├── main.py          FastAPI app (routes)
 │   ├── ingest.py        PDF/text parsing + chunking
-│   ├── vectorstore.py   Chroma wrapper (embed + store + search)
+│   ├── vectorstore.py   SQLite + NumPy vector store (embed + search)
 │   ├── llm.py           Grounded-answer prompt + Groq API call
 │   ├── requirements.txt
 │   └── .env.example
@@ -89,13 +89,14 @@ Open http://localhost:5173 — the frontend reads the backend URL from the
 ## Deploying it (frontend on Vercel + backend on Render)
 
 The frontend is a static Vite site (works fine on Vercel). The backend is a
-long-running FastAPI server, but it has no heavy local ML dependencies:
-document/query embeddings come from Gemini's free embedding API and answers
-from Groq's free LLM API -- so the whole service idles around ~250MB and
-fits comfortably in Render's free 512MB tier. (An earlier version embedded
-locally with sentence-transformers + torch, which needs ~700MB+ and got
-OOM-killed on the free tier; Hugging Face has since put Docker Spaces
-behind PRO, so the embedding step moved to Gemini's free API instead.)
+long-running FastAPI server, but it has no heavy or native ML dependencies:
+document/query embeddings come from Gemini's free embedding API, answers
+from Groq's free LLM API, and the vector store is plain SQLite + NumPy --
+so the whole service idles around ~150MB and fits comfortably in Render's
+free 512MB tier. (Two things were tried first: local torch embeddings
+needed ~700MB+ and got OOM-killed; then ChromaDB, whose native HNSW
+extension crashes with "Exited with status 132" on free-tier CPUs.
+The SQLite store sidesteps both -- see `vectorstore.py`.)
 
 ### 1. Deploy the backend on Render (free)
 
@@ -144,10 +145,15 @@ behind PRO, so the embedding step moved to Gemini's free API instead.)
 - Why retrieval and generation are separate concerns, and what changes if
   you swap the vector DB or the LLM provider — the split between
   `vectorstore.py` and `llm.py` is designed to make this obvious.
+- Why the vector store is hand-rolled (SQLite + NumPy brute-force cosine)
+  instead of ChromaDB: ChromaDB's native HNSW extension executes illegal
+  CPU instructions (SIGILL) on free-tier hosts, killing the process at
+  startup -- at this scale (hundreds of chunks) an index buys nothing and
+  a ~70-line store is fully transparent. If the corpus grew to millions
+  of vectors, that's when you'd reach for a real index.
 - Trade-offs of embeddings via API (no local GPU/RAM needed, runs on a free
   host, but needs network and a key) vs. a local embedding model (private,
   works offline, but needs ~700MB+ RAM so it can't run on free tiers) --
-  this project moved from local to API embeddings for exactly that reason,
-  and `vectorstore.py::GeminiEmbedder` is written so the swap is one class.
+  this project moved from local to API embeddings for exactly that reason.
 - What "grounded" means in the system prompt (`llm.py::SYSTEM_PROMPT`) and
   why citations are enforced there rather than post-processed.

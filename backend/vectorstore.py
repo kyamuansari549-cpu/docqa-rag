@@ -1,31 +1,34 @@
 """
-Thin wrapper around a persistent Chroma collection. Embeddings come from
-the Gemini embedding API (free tier), so this service has no heavy local
-ML dependencies -- answering questions calls out to Groq.
+Vector store: SQLite for persistence, NumPy for brute-force cosine search.
+
+Why not ChromaDB? ChromaDB ships native extensions (chroma-hnswlib's C++
+index, onnxruntime, tokenizers) that execute illegal CPU instructions
+(SIGILL, "Exited with status 132") on free-tier hosts like Render's --
+the process dies ~25s after startup, before serving anything. A
+brute-force cosine search over a few hundred 768-dim vectors takes
+milliseconds, so for this app's scale an index is unnecessary complexity.
+Embeddings come from the Gemini embedding API (free tier), so this
+service has no heavy local ML dependencies -- answering questions calls
+out to Groq.
 """
 
 import os
+import sqlite3
 import uuid
+
 import httpx
-import chromadb
-from chromadb.api.types import Documents, Embeddings, EmbeddingFunction
+import numpy as np
+
 from ingest import Chunk
 
-CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_data")
+DB_PATH = os.getenv("DB_PATH", "./docqa.db")
 EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")  # free key: https://aistudio.google.com/apikey
 _EMBED_BATCH_SIZE = 50
 
 
-class GeminiEmbedder(EmbeddingFunction[Documents]):
-    """Document/query embeddings via the Gemini API (generous free tier).
-
-    The backend previously embedded locally with sentence-transformers +
-    torch, but that stack idles at ~700MB+ RAM and gets OOM-killed on free
-    hosts (Render's free tier is 512MB; Hugging Face now puts Docker Spaces
-    behind PRO). The API embedder keeps this service around ~250MB with
-    zero local ML dependencies, so it runs fine on a free host.
-    """
+class GeminiEmbedder:
+    """Document/query embeddings via the Gemini API (generous free tier)."""
 
     def __init__(self, api_key: str | None = GOOGLE_API_KEY, model: str = EMBED_MODEL):
         if not api_key:
@@ -36,7 +39,7 @@ class GeminiEmbedder(EmbeddingFunction[Documents]):
         self._api_key = api_key
         self._model = model
 
-    def embed_texts(self, texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -> Embeddings:
+    def embed_texts(self, texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
         if not texts:
             return []
         model_name = self._model.removeprefix("models/")
@@ -44,7 +47,7 @@ class GeminiEmbedder(EmbeddingFunction[Documents]):
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model_name}:batchEmbedContents?key={self._api_key}"
         )
-        out: Embeddings = []
+        out: list[list[float]] = []
         with httpx.Client(timeout=60.0) as client:
             for i in range(0, len(texts), _EMBED_BATCH_SIZE):
                 batch = texts[i : i + _EMBED_BATCH_SIZE]
@@ -68,69 +71,131 @@ class GeminiEmbedder(EmbeddingFunction[Documents]):
             raise RuntimeError(f"Gemini returned {len(out)} embeddings for {len(texts)} texts")
         return out
 
-    def __call__(self, input: Documents) -> Embeddings:
-        # Used by Chroma when indexing documents.
-        return self.embed_texts(list(input), task_type="RETRIEVAL_DOCUMENT")
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS chunks (
+               id TEXT PRIMARY KEY,
+               doc_id TEXT NOT NULL,
+               doc_name TEXT NOT NULL,
+               page INTEGER NOT NULL,
+               chunk_index INTEGER NOT NULL,
+               text TEXT NOT NULL,
+               embedding BLOB NOT NULL
+           )"""
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON chunks(doc_id)")
+    conn.commit()
+    return conn
 
 
-_client = chromadb.PersistentClient(path=CHROMA_DIR)
 _embedder = GeminiEmbedder()
-_collection = _client.get_or_create_collection(
-    name="documents",
-    embedding_function=_embedder,
-    metadata={"hnsw:space": "cosine"},
-)
+# Ensure the table exists at startup.
+_connect().close()
+
+
+def _to_blob(vec: list[float]) -> bytes:
+    return np.asarray(vec, dtype=np.float32).tobytes()
+
+
+def _from_blob(blob: bytes) -> np.ndarray:
+    return np.frombuffer(blob, dtype=np.float32)
 
 
 def add_chunks(chunks: list[Chunk]) -> None:
     if not chunks:
         return
-    ids = [f"{c.doc_id}-{c.chunk_index}-{uuid.uuid4().hex[:6]}" for c in chunks]
-    documents = [c.text for c in chunks]
-    metadatas = [
-        {"doc_id": c.doc_id, "doc_name": c.doc_name, "page": c.page or 0, "chunk_index": c.chunk_index}
-        for c in chunks
+    vectors = _embedder.embed_texts([c.text for c in chunks], task_type="RETRIEVAL_DOCUMENT")
+    rows = [
+        (
+            f"{c.doc_id}-{c.chunk_index}-{uuid.uuid4().hex[:6]}",
+            c.doc_id,
+            c.doc_name,
+            c.page or 0,
+            c.chunk_index,
+            c.text,
+            _to_blob(v),
+        )
+        for c, v in zip(chunks, vectors)
     ]
-    _collection.add(ids=ids, documents=documents, metadatas=metadatas)
+    conn = _connect()
+    try:
+        conn.executemany(
+            "INSERT INTO chunks (id, doc_id, doc_name, page, chunk_index, text, embedding)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def query(question: str, top_k: int = 5, doc_id: str | None = None) -> list[dict]:
-    where = {"doc_id": doc_id} if doc_id else None
     # Queries are embedded with RETRIEVAL_QUERY (documents were indexed
     # with RETRIEVAL_DOCUMENT) -- the task-optimized pair retrieves better.
-    query_embedding = _embedder.embed_texts([question], task_type="RETRIEVAL_QUERY")[0]
-    result = _collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k,
-        where=where,
+    q = np.asarray(
+        _embedder.embed_texts([question], task_type="RETRIEVAL_QUERY")[0], dtype=np.float32
     )
-    hits = []
-    docs = result.get("documents", [[]])[0]
-    metas = result.get("metadatas", [[]])[0]
-    dists = result.get("distances", [[]])[0]
-    for text, meta, dist in zip(docs, metas, dists):
-        hits.append(
-            {
-                "text": text,
-                "doc_id": meta.get("doc_id"),
-                "doc_name": meta.get("doc_name"),
-                "page": meta.get("page"),
-                "similarity": round(1 - dist, 4),
-            }
-        )
-    return hits
+    q_norm = np.linalg.norm(q)
+    if q_norm == 0:
+        return []
+    q = q / q_norm
+
+    conn = _connect()
+    try:
+        if doc_id:
+            cur = conn.execute(
+                "SELECT text, doc_id, doc_name, page, embedding FROM chunks WHERE doc_id = ?",
+                (doc_id,),
+            )
+        else:
+            cur = conn.execute("SELECT text, doc_id, doc_name, page, embedding FROM chunks")
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return []
+
+    texts, doc_ids, doc_names, pages, blobs = zip(*rows)
+    mat = np.stack([_from_blob(b) for b in blobs])  # (n, dim)
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    sims = (mat / norms) @ q  # cosine similarity
+
+    k = min(top_k, len(rows))
+    top_idx = np.argpartition(sims, -k)[-k:]
+    top_idx = top_idx[np.argsort(sims[top_idx])][::-1]
+
+    return [
+        {
+            "text": texts[i],
+            "doc_id": doc_ids[i],
+            "doc_name": doc_names[i],
+            "page": pages[i],
+            "similarity": round(float(sims[i]), 4),
+        }
+        for i in top_idx
+    ]
 
 
 def list_documents() -> list[dict]:
-    all_items = _collection.get(include=["metadatas"])
-    seen = {}
-    for meta in all_items.get("metadatas", []):
-        doc_id = meta.get("doc_id")
-        if doc_id not in seen:
-            seen[doc_id] = {"doc_id": doc_id, "doc_name": meta.get("doc_name"), "chunks": 0}
-        seen[doc_id]["chunks"] += 1
-    return list(seen.values())
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            "SELECT doc_id, doc_name, COUNT(*) FROM chunks GROUP BY doc_id, doc_name"
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [{"doc_id": d, "doc_name": n, "chunks": c} for d, n, c in rows]
 
 
 def delete_document(doc_id: str) -> None:
-    _collection.delete(where={"doc_id": doc_id})
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+        conn.commit()
+    finally:
+        conn.close()
