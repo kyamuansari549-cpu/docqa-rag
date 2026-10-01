@@ -16,7 +16,7 @@ page they came from.
  Ask                Retrieve             Generate
 ┌──────────┐  query ┌───────────┐  top-k ┌────────────────┐
 │ Question │ ─────► │ SQLite    │──────► │ Groq API       │──► Answer
-└──────────┘        │ cosine    │  chunks│ (Llama, grounded│    + citations
+└──────────┘        │ cosine    │  chunks│ (gpt-oss, grounded│    + citations
                      │ search    │        │  prompt)       │
                      └───────────┘        └────────────────┘
 ```
