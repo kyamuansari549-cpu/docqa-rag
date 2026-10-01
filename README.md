@@ -90,7 +90,8 @@ Open http://localhost:5173 — the frontend reads the backend URL from the
 
 The frontend is a static Vite site (works fine on Vercel). The backend is a
 long-running FastAPI server, but it has no heavy or native ML dependencies:
-document/query embeddings come from Gemini's free embedding API, answers
+document/query embeddings come from Gemini's free embedding API
+(`gemini-embedding-001`, 768 dims), answers
 from Groq's free LLM API, and the vector store is plain SQLite + NumPy --
 so the whole service idles around ~150MB and fits comfortably in Render's
 free 512MB tier. (Two things were tried first: local torch embeddings

@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -47,7 +48,18 @@ async def upload_document(file: UploadFile = File(...)):
     if not chunks:
         raise HTTPException(status_code=400, detail="No extractable text found in this file.")
 
-    vectorstore.add_chunks(chunks)
+    try:
+        vectorstore.add_chunks(chunks)
+    except httpx.HTTPStatusError as e:
+        # e.g. bad/expired GOOGLE_API_KEY or a retired embedding model --
+        # surface it readably instead of a bare 500.
+        raise HTTPException(
+            status_code=502,
+            detail=f"Embedding service error ({e.response.status_code}): "
+            "check GOOGLE_API_KEY and the Gemini embedding model.",
+        )
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Embedding service unreachable: {e}")
     return {"doc_id": doc_id, "doc_name": file.filename, "chunks_indexed": len(chunks)}
 
 
@@ -67,7 +79,17 @@ def chat(req: ChatRequest):
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    hits = vectorstore.query(req.question, top_k=req.top_k, doc_id=req.doc_id)
+    try:
+        hits = vectorstore.query(req.question, top_k=req.top_k, doc_id=req.doc_id)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Embedding service error ({e.response.status_code}): "
+            "check GOOGLE_API_KEY and the Gemini embedding model.",
+        )
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Embedding service unreachable: {e}")
+
     answer = llm.answer_question(req.question, hits)
 
     sources = [

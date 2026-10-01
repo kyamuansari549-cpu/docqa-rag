@@ -10,6 +10,12 @@ milliseconds, so for this app's scale an index is unnecessary complexity.
 Embeddings come from the Gemini embedding API (free tier), so this
 service has no heavy local ML dependencies -- answering questions calls
 out to Groq.
+
+NOTE (2026-10-02): Google retired `text-embedding-004` -- it now returns
+404 for newly-issued API keys. The current model is `gemini-embedding-001`
+(same batchEmbedContents endpoint). It natively emits 3072-dim vectors, so
+we request outputDimensionality=768 and L2-normalize (required by Google's
+docs whenever the dimensionality is reduced).
 """
 
 import os
@@ -22,9 +28,12 @@ import numpy as np
 from ingest import Chunk
 
 DB_PATH = os.getenv("DB_PATH", "./docqa.db")
-EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
+EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-001")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")  # free key: https://aistudio.google.com/apikey
 _EMBED_BATCH_SIZE = 50
+# gemini-embedding-001 natively emits 3072-dim vectors; 768 keeps the
+# SQLite blobs small and is plenty for this app's scale.
+_EMBED_DIMENSIONS = 768
 
 
 class GeminiEmbedder:
@@ -40,6 +49,7 @@ class GeminiEmbedder:
         self._model = model
 
     def embed_texts(self, texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
+        """Embed texts; returned vectors are L2-normalized unit vectors."""
         if not texts:
             return []
         model_name = self._model.removeprefix("models/")
@@ -59,6 +69,7 @@ class GeminiEmbedder:
                                 "model": self._model,
                                 "content": {"parts": [{"text": t}]},
                                 "taskType": task_type,
+                                "outputDimensionality": _EMBED_DIMENSIONS,
                             }
                             for t in batch
                         ]
@@ -69,7 +80,14 @@ class GeminiEmbedder:
                     out.append(emb["values"])
         if len(out) != len(texts):
             raise RuntimeError(f"Gemini returned {len(out)} embeddings for {len(texts)} texts")
-        return out
+        # L2-normalize: required by Google's docs when outputDimensionality
+        # reduces the native 3072 dims; also makes cosine sim a dot product.
+        normed: list[list[float]] = []
+        for v in out:
+            arr = np.asarray(v, dtype=np.float64)
+            n = np.linalg.norm(arr)
+            normed.append((arr / n).tolist() if n > 0 else arr.tolist())
+        return normed
 
 
 def _connect() -> sqlite3.Connection:
