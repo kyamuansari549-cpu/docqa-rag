@@ -8,17 +8,35 @@ questions calls out to Groq.
 import os
 import uuid
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.api.types import Documents, Embeddings, EmbeddingFunction
+from sentence_transformers import SentenceTransformer
 from ingest import Chunk
 
 CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_data")
 EMBED_MODEL = "all-MiniLM-L6-v2"
 
+
+class MiniLMEmbedder(EmbeddingFunction[Documents]):
+    """Local embedding function built directly on sentence-transformers.
+
+    We deliberately do NOT use chromadb.utils.embedding_functions: merely
+    importing that package imports onnxruntime, whose wheel executes CPU
+    instructions that are illegal on some hosts (notably Render's free
+    tier) -- the process dies with SIGILL (exit 132) before serving a
+    single request. Wrapping SentenceTransformer ourselves avoids it.
+    """
+
+    def __init__(self, model_name: str = EMBED_MODEL):
+        self._model = SentenceTransformer(model_name)
+
+    def __call__(self, input: Documents) -> Embeddings:
+        return self._model.encode(list(input)).tolist()
+
+
 _client = chromadb.PersistentClient(path=CHROMA_DIR)
-_embedder = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
 _collection = _client.get_or_create_collection(
     name="documents",
-    embedding_function=_embedder,
+    embedding_function=MiniLMEmbedder(),
     metadata={"hnsw:space": "cosine"},
 )
 
