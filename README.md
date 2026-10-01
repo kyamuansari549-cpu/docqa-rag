@@ -39,6 +39,7 @@ docqa-rag/
 │   ├── vectorstore.py   Chroma wrapper (embed + store + search)
 │   ├── llm.py           Grounded-answer prompt + Groq API call
 │   ├── requirements.txt
+│   ├── Dockerfile       Backend image for Hugging Face Spaces
 │   └── .env.example
 ├── frontend/
 │   ├── src/
@@ -89,25 +90,33 @@ Open http://localhost:5173 — the frontend reads the backend URL from the
 4. Click a document in the sidebar to scope questions to just that file,
    or stay on "All documents" to search across everything you've uploaded.
 
-## Deploying it (frontend on Vercel + backend on Render)
+## Deploying it (frontend on Vercel + backend on Hugging Face Spaces)
 
 The frontend is a static Vite site (works fine on Vercel), but the backend
-is a long-running FastAPI server — it needs its own host. If the frontend
-can't reach it you get the red "Can't reach the backend" banner.
+is a long-running FastAPI server with a local torch embedding model -- it
+needs a host with enough RAM. Render's free tier (512MB) is **not** enough:
+torch + transformers + chroma need ~700MB+ and the process gets OOM-killed.
+So the backend lives on a Hugging Face Space -- free tier gives 2 vCPU and
+16GB RAM, plenty for this stack.
 
-### 1. Deploy the backend on Render (free)
+### 1. Deploy the backend on Hugging Face Spaces (free)
 
-1. Push this repo to GitHub (done) and grab a free Groq API key from
-   https://console.groq.com/keys.
-2. In the [Render dashboard](https://dashboard.render.com): **New > Blueprint**,
-   select this repo — `render.yaml` fills in the build/start commands.
-3. When prompted, set the env vars:
-   - `GROQ_API_KEY` = your Groq key
+1. Create a free account at https://huggingface.co, then **New Space**:
+   SDK **Docker**, template **Blank**, name e.g. `docqa-rag-backend`
+   (Public visibility is fine -- secrets stay in Settings).
+2. Upload the backend files: on the Space page go to **Files > Add file >
+   Upload files** and drag in everything from this repo's `backend/`
+   folder (`main.py`, `ingest.py`, `vectorstore.py`, `llm.py`,
+   `requirements.txt`, `Dockerfile`, `.dockerignore`, `.env.example`)
+   so they sit at the Space repo's root. The Space builds automatically
+   (takes a few minutes -- torch is a big download).
+3. Space page > **Settings > Variables and secrets** > **New secret**, add:
+   - `GROQ_API_KEY` = your key (free at https://console.groq.com/keys)
    - `FRONTEND_URL` = your deployed frontend URL
      (e.g. `https://docqa-rag-two.vercel.app`)
-4. Deploy, then copy the service URL
-   (e.g. `https://docqa-rag-backend.onrender.com`).
-   Check `https://<your-service>/health` returns `{"status":"ok"}`.
+4. Wait for the status to turn **Running**, then open
+   `https://<username>-docqa-rag-backend.hf.space/health` --
+   it should return `{"status":"ok"}`.
 
 ### 2. Point the frontend at the backend
 
@@ -118,11 +127,11 @@ can't reach it you get the red "Can't reach the backend" banner.
 
 ### Notes
 
-- Render's free tier sleeps after ~15 min of inactivity — the first request
-  after that takes ~30–60s (cold start + embedding model load). Uploads are
-  also lost on restart/redeploy because the disk is ephemeral; for a demo
-  that's fine, for persistence attach a Render Disk or move Chroma to a
-  hosted vector DB.
+- The free Space sleeps after ~48h of inactivity -- the first request after
+  that takes ~30-60s (cold start + embedding model load). Uploads are also
+  lost on restart/redeploy because the disk is ephemeral; for a demo that's
+  fine, for persistence attach a [persistent storage](https://huggingface.co/docs/hub/spaces-storage)
+  volume or move Chroma to a hosted vector DB.
 
 ## Ideas for extending it (good for standing out further)
 
