@@ -15,8 +15,8 @@ page they came from.
 
  Ask                Retrieve             Generate
 ┌──────────┐  query ┌───────────┐  top-k ┌────────────────┐
-│ Question │ ─────► │ Chroma    │──────► │ Claude API     │──► Answer
-└──────────┘        │ similarity│  chunks│ (grounded      │    + citations
+│ Question │ ─────► │ Chroma    │──────► │ Groq API       │──► Answer
+└──────────┘        │ similarity│  chunks│ (Llama, grounded│    + citations
                      │ search    │        │  prompt)       │
                      └───────────┘        └────────────────┘
 ```
@@ -32,19 +32,20 @@ without "the framework did it."
 ## Project structure
 
 ```
-rag-doc-qa/
+docqa-rag/
 ├── backend/
 │   ├── main.py          FastAPI app (routes)
 │   ├── ingest.py        PDF/text parsing + chunking
 │   ├── vectorstore.py   Chroma wrapper (embed + store + search)
-│   ├── llm.py           Grounded-answer prompt + Claude API call
+│   ├── llm.py           Grounded-answer prompt + Groq API call
 │   ├── requirements.txt
 │   └── .env.example
-└── frontend/
-    ├── src/
-    │   ├── App.jsx       Chat UI, upload, citations
-    │   └── App.css
-    └── package.json
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx       Chat UI, upload, citations
+│   │   └── App.css
+│   └── package.json
+└── render.yaml          One-click Render blueprint for the backend
 ```
 
 ## Setup
@@ -58,7 +59,8 @@ source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# edit .env and add your ANTHROPIC_API_KEY (from console.anthropic.com)
+# edit .env and add your GROQ_API_KEY (free at https://console.groq.com/keys)
+# and set FRONTEND_URL to your deployed frontend URL when deploying
 
 uvicorn main:app --reload --port 8000
 ```
@@ -74,8 +76,8 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 — the frontend expects the backend on
-http://localhost:8000 (already configured in `App.jsx`).
+Open http://localhost:5173 — the frontend reads the backend URL from the
+`VITE_API_URL` env var and falls back to http://localhost:8000 for local dev.
 
 ## Using it
 
@@ -86,6 +88,41 @@ http://localhost:8000 (already configured in `App.jsx`).
    each claim.
 4. Click a document in the sidebar to scope questions to just that file,
    or stay on "All documents" to search across everything you've uploaded.
+
+## Deploying it (frontend on Vercel + backend on Render)
+
+The frontend is a static Vite site (works fine on Vercel), but the backend
+is a long-running FastAPI server — it needs its own host. If the frontend
+can't reach it you get the red "Can't reach the backend" banner.
+
+### 1. Deploy the backend on Render (free)
+
+1. Push this repo to GitHub (done) and grab a free Groq API key from
+   https://console.groq.com/keys.
+2. In the [Render dashboard](https://dashboard.render.com): **New > Blueprint**,
+   select this repo — `render.yaml` fills in the build/start commands.
+3. When prompted, set the env vars:
+   - `GROQ_API_KEY` = your Groq key
+   - `FRONTEND_URL` = your deployed frontend URL
+     (e.g. `https://docqa-rag-two.vercel.app`)
+4. Deploy, then copy the service URL
+   (e.g. `https://docqa-rag-backend.onrender.com`).
+   Check `https://<your-service>/health` returns `{"status":"ok"}`.
+
+### 2. Point the frontend at the backend
+
+1. In the [Vercel dashboard](https://vercel.com/dashboard): open the project >
+   **Settings > Environment Variables**.
+2. Add `VITE_API_URL` = `https://<your-render-service-url>` (no trailing slash).
+3. **Deployments > Redeploy** so the new env var is baked into the build.
+
+### Notes
+
+- Render's free tier sleeps after ~15 min of inactivity — the first request
+  after that takes ~30–60s (cold start + embedding model load). Uploads are
+  also lost on restart/redeploy because the disk is ephemeral; for a demo
+  that's fine, for persistence attach a Render Disk or move Chroma to a
+  hosted vector DB.
 
 ## Ideas for extending it (good for standing out further)
 

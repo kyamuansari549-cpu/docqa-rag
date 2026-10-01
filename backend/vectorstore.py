@@ -2,7 +2,7 @@
 Thin wrapper around a persistent Chroma collection. Embeddings are
 generated with a local sentence-transformers model, so no API key or
 network call is needed just to index documents -- only answering
-questions calls out to Claude.
+questions calls out to Groq.
 """
 
 import os

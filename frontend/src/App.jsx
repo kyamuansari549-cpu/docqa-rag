@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 
-const API_BASE = "http://localhost:8000";
+// Backend URL comes from the VITE_API_URL env var in production (set it in the
+// Vercel dashboard); falls back to the local dev server otherwise.
+const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/+$/, "");
 
 /* ---------- Icons (inline, no deps) ---------- */
 
@@ -187,7 +189,7 @@ export default function App() {
       const data = await res.json();
       setDocuments(data);
     } catch {
-      setError("Can't reach the backend. Is it running on port 8000?");
+      setError(`Can't reach the backend (${API_BASE}). Is the backend server running?`);
     }
   }
 

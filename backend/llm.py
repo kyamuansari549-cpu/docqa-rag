@@ -1,15 +1,15 @@
 """
 Builds the grounded-answer prompt from retrieved chunks and calls the
-Claude API. Keeping this separate from vectorstore.py makes the
+Groq API. Keeping this separate from vectorstore.py makes the
 retrieval-vs-generation split in the RAG pipeline obvious -- a common
 thing interviewers ask you to point to in your own code.
 """
 
 import os
-from groq import GROQ
+from groq import Groq
 
-_client = GROQ(api_key=os.getenv("GROQ_API_KEY"))
-MODEL = os.getenv("GROQ_MODEL", "GROQ_MODEL=llama-3.3-70b-versatile")
+_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 SYSTEM_PROMPT = """You are a document Q&A assistant. You answer questions using ONLY the
 numbered source excerpts provided below. Rules:
@@ -37,10 +37,12 @@ def answer_question(question: str, hits: list[dict]) -> str:
     context = _build_context(hits)
     user_message = f"Sources:\n\n{context}\n\nQuestion: {question}"
 
-    response = _client.messages.create(
+    response = _client.chat.completions.create(
         model=MODEL,
         max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
     )
-    return "".join(block.text for block in response.content if block.type == "text")
+    return response.choices[0].message.content

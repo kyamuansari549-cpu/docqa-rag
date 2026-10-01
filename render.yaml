@@ -1,0 +1,22 @@
+# Render Blueprint — deploys the FastAPI backend as a web service.
+# In the Render dashboard: New > Blueprint > select this repo.
+# Then set the GROQ_API_KEY and FRONTEND_URL env vars when prompted.
+services:
+  - type: web
+    name: docqa-rag-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: GROQ_API_KEY
+        sync: false # set in the Render dashboard (free key: https://console.groq.com/keys)
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: FRONTEND_URL
+        sync: false # set to your deployed frontend URL, e.g. https://docqa-rag-two.vercel.app
+      - key: CHROMA_DIR
+        value: ./chroma_data

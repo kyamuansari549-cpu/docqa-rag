@@ -1,3 +1,4 @@
+import os
 import uuid
 from dotenv import load_dotenv
 
@@ -13,9 +14,15 @@ import llm
 
 app = FastAPI(title="Doc Q&A (RAG)")
 
+# Comma-separated list of frontend origins allowed to call this API.
+# Local dev default; in production set FRONTEND_URL to the deployed
+# frontend URL, e.g. FRONTEND_URL=https://docqa-rag-two.vercel.app
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+ALLOWED_ORIGINS = [o.strip() for o in FRONTEND_URL.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
