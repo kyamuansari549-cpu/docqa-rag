@@ -9,8 +9,8 @@ page they came from.
 ```
  Upload            Ingest             Embed              Store
 ┌──────┐   file    ┌─────────┐  text  ┌──────────┐ vector ┌─────────┐
-│  PDF │ ────────► │ pypdf    │──────► │ MiniLM   │──────► │ Chroma  │
-│ /txt │           │ + chunk  │        │ embedder │        │ (local) │
+│  PDF │ ────────► │ pypdf    │──────► │ Gemini   │──────► │ Chroma  │
+│ /txt │           │ + chunk  │        │ embed API│        │ (local) │
 └──────┘           └─────────┘        └──────────┘        └─────────┘
 
  Ask                Retrieve             Generate
@@ -39,14 +39,12 @@ docqa-rag/
 │   ├── vectorstore.py   Chroma wrapper (embed + store + search)
 │   ├── llm.py           Grounded-answer prompt + Groq API call
 │   ├── requirements.txt
-│   ├── Dockerfile       Backend image for Hugging Face Spaces
 │   └── .env.example
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx       Chat UI, upload, citations
 │   │   └── App.css
 │   └── package.json
-└── render.yaml          One-click Render blueprint for the backend
 ```
 
 ## Setup
@@ -61,13 +59,11 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # edit .env and add your GROQ_API_KEY (free at https://console.groq.com/keys)
+# and GOOGLE_API_KEY (free at https://aistudio.google.com/apikey, for embeddings)
 # and set FRONTEND_URL to your deployed frontend URL when deploying
 
 uvicorn main:app --reload --port 8000
 ```
-
-First run will download the local embedding model (~90MB) — needs
-internet once, then works offline for indexing.
 
 ### 2. Frontend
 
@@ -90,48 +86,47 @@ Open http://localhost:5173 — the frontend reads the backend URL from the
 4. Click a document in the sidebar to scope questions to just that file,
    or stay on "All documents" to search across everything you've uploaded.
 
-## Deploying it (frontend on Vercel + backend on Hugging Face Spaces)
+## Deploying it (frontend on Vercel + backend on Render)
 
-The frontend is a static Vite site (works fine on Vercel), but the backend
-is a long-running FastAPI server with a local torch embedding model -- it
-needs a host with enough RAM. Render's free tier (512MB) is **not** enough:
-torch + transformers + chroma need ~700MB+ and the process gets OOM-killed.
-So the backend lives on a Hugging Face Space -- free tier gives 2 vCPU and
-16GB RAM, plenty for this stack.
+The frontend is a static Vite site (works fine on Vercel). The backend is a
+long-running FastAPI server, but it has no heavy local ML dependencies:
+document/query embeddings come from Gemini's free embedding API and answers
+from Groq's free LLM API -- so the whole service idles around ~250MB and
+fits comfortably in Render's free 512MB tier. (An earlier version embedded
+locally with sentence-transformers + torch, which needs ~700MB+ and got
+OOM-killed on the free tier; Hugging Face has since put Docker Spaces
+behind PRO, so the embedding step moved to Gemini's free API instead.)
 
-### 1. Deploy the backend on Hugging Face Spaces (free)
+### 1. Deploy the backend on Render (free)
 
-1. Create a free account at https://huggingface.co, then **New Space**:
-   SDK **Docker**, template **Blank**, name e.g. `docqa-rag-backend`
-   (Public visibility is fine -- secrets stay in Settings).
-2. Upload the backend files: on the Space page go to **Files > Add file >
-   Upload files** and drag in everything from this repo's `backend/`
-   folder (`main.py`, `ingest.py`, `vectorstore.py`, `llm.py`,
-   `requirements.txt`, `Dockerfile`, `.dockerignore`, `.env.example`)
-   so they sit at the Space repo's root. The Space builds automatically
-   (takes a few minutes -- torch is a big download).
-3. Space page > **Settings > Variables and secrets** > **New secret**, add:
+1. In the [Render dashboard](https://dashboard.render.com): **New > Web
+   Service**, select this repo, and set:
+   - **Language:** Python, **Root Directory:** `backend`
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - Instance type **Free**.
+2. Under **Environment**, add:
    - `GROQ_API_KEY` = your key (free at https://console.groq.com/keys)
+   - `GOOGLE_API_KEY` = your key (free at https://aistudio.google.com/apikey --
+     used for embeddings)
    - `FRONTEND_URL` = your deployed frontend URL
      (e.g. `https://docqa-rag-two.vercel.app`)
-4. Wait for the status to turn **Running**, then open
-   `https://<username>-docqa-rag-backend.hf.space/health` --
-   it should return `{"status":"ok"}`.
+3. Deploy, then check `https://<your-service>.onrender.com/health`
+   returns `{"status":"ok"}`.
 
 ### 2. Point the frontend at the backend
 
 1. In the [Vercel dashboard](https://vercel.com/dashboard): open the project >
    **Settings > Environment Variables**.
-2. Add `VITE_API_URL` = `https://<your-render-service-url>` (no trailing slash).
+2. Add `VITE_API_URL` = `https://<your-service>.onrender.com` (no trailing slash).
 3. **Deployments > Redeploy** so the new env var is baked into the build.
 
 ### Notes
 
-- The free Space sleeps after ~48h of inactivity -- the first request after
-  that takes ~30-60s (cold start + embedding model load). Uploads are also
-  lost on restart/redeploy because the disk is ephemeral; for a demo that's
-  fine, for persistence attach a [persistent storage](https://huggingface.co/docs/hub/spaces-storage)
-  volume or move Chroma to a hosted vector DB.
+- Render's free tier sleeps after ~15 min of inactivity -- the first request
+  after that takes ~30-60s (cold start). Uploads are also lost on
+  restart/redeploy because the disk is ephemeral; for a demo that's fine,
+  for persistence attach a Render Disk or move Chroma to a hosted vector DB.
 
 ## Ideas for extending it (good for standing out further)
 
@@ -149,7 +144,10 @@ So the backend lives on a Hugging Face Space -- free tier gives 2 vCPU and
 - Why retrieval and generation are separate concerns, and what changes if
   you swap the vector DB or the LLM provider — the split between
   `vectorstore.py` and `llm.py` is designed to make this obvious.
-- Trade-offs of a local embedding model (free, private, slower to start)
-  vs. an API-based one (costs money, needs network, no cold-start delay).
+- Trade-offs of embeddings via API (no local GPU/RAM needed, runs on a free
+  host, but needs network and a key) vs. a local embedding model (private,
+  works offline, but needs ~700MB+ RAM so it can't run on free tiers) --
+  this project moved from local to API embeddings for exactly that reason,
+  and `vectorstore.py::GeminiEmbedder` is written so the swap is one class.
 - What "grounded" means in the system prompt (`llm.py::SYSTEM_PROMPT`) and
   why citations are enforced there rather than post-processed.
