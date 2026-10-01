@@ -9,7 +9,10 @@ import os
 from groq import Groq
 
 _client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+# NOTE (2026-10-02): Groq shut down llama-3.3-70b-versatile on 2026-08-16
+# (free/dev tiers). Groq's recommended replacement is openai/gpt-oss-120b.
+# Override any time with the GROQ_MODEL env var -- no code change needed.
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 SYSTEM_PROMPT = """You are a document Q&A assistant. You answer questions using ONLY the
 numbered source excerpts provided below. Rules:

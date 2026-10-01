@@ -9,6 +9,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import groq
+
 import ingest
 import vectorstore
 import llm
@@ -90,7 +92,15 @@ def chat(req: ChatRequest):
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Embedding service unreachable: {e}")
 
-    answer = llm.answer_question(req.question, hits)
+    try:
+        answer = llm.answer_question(req.question, hits)
+    except groq.APIStatusError as e:
+        # e.g. retired model id or bad GROQ_API_KEY -- surface readably.
+        raise HTTPException(
+            status_code=502,
+            detail=f"Answer generation failed ({e.status_code}): "
+            "check GROQ_API_KEY and the Groq model name.",
+        )
 
     sources = [
         {
