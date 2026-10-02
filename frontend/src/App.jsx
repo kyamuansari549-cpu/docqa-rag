@@ -1,8 +1,38 @@
 import { useState, useRef, useEffect } from "react";
+import { renderMarkdown, plainText } from "./markdown.jsx";
 
 // Backend URL comes from the VITE_API_URL env var in production (set it in the
 // Vercel dashboard); falls back to the local dev server otherwise.
 const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+
+/* ---------- Brand mark: custom "R" monogram (same mark as the main project) ---------- */
+
+function BrandMark({ size = 26 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="37" height="37" rx="10.5" fill="#211a15" stroke="#3a2e26" strokeWidth="1.5" />
+      <g stroke="#5bb5a5" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="14.5" y1="10.5" x2="14.5" y2="29.5" />
+        <path d="M14.5 10.5 H22.8 A6 6 0 0 1 22.8 22.5 H14.5" />
+        <line x1="19.5" y1="22.5" x2="27" y2="29.5" />
+      </g>
+    </svg>
+  );
+}
+
+/* ---------- Launch mark for the send button ---------- */
+
+function LaunchIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true">
+      <circle cx="6.6" cy="17.4" r="2.3" fill="currentColor" stroke="none" />
+      <line x1="9.6" y1="14.4" x2="17" y2="7" />
+      <polyline points="11 7 17 7 17 13" />
+    </svg>
+  );
+}
 
 /* ---------- Icons (inline, no deps) ---------- */
 
@@ -29,6 +59,7 @@ const Icon = {
       <path d="M5 12h14M13 6l6 6-6 6" />
     </svg>
   ),
+  launch: <LaunchIcon />,
   stack: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3 3 8l9 5 9-5-9-5Z" />
@@ -63,7 +94,7 @@ function CopyButton({ text }) {
       className="copy-btn"
       onClick={async () => {
         try {
-          await navigator.clipboard.writeText(text.replace(/\[\d+\]/g, "").trim());
+          await navigator.clipboard.writeText(plainText(text));
           setCopied(true);
           setTimeout(() => setCopied(false), 1400);
         } catch {
@@ -87,8 +118,6 @@ function Message({ role, content, sources, msgId }) {
     );
   }
 
-  const parts = content.split(/(\[\d+\])/g);
-
   const scrollToSource = (n) => {
     const el = document.getElementById(`src-${msgId}-${n}`);
     if (!el) return;
@@ -100,25 +129,12 @@ function Message({ role, content, sources, msgId }) {
   return (
     <div className="msg msg-assistant">
       <div className="msg-row">
-        <div className="avatar avatar-assistant">§</div>
+        <div className="avatar avatar-assistant">
+          <BrandMark size={26} />
+        </div>
         <div className="msg-col">
-          <div className="msg-bubble msg-bubble-assistant">
-            {parts.map((part, i) => {
-              const match = part.match(/^\[(\d+)\]$/);
-              if (match) {
-                return (
-                  <button
-                    key={i}
-                    className="footnote"
-                    onClick={() => scrollToSource(match[1])}
-                    title={`Jump to source ${match[1]}`}
-                  >
-                    {match[1]}
-                  </button>
-                );
-              }
-              return <span key={i}>{part}</span>;
-            })}
+          <div className="msg-bubble msg-bubble-assistant md">
+            {renderMarkdown(content, { sources, msgId, onCite: scrollToSource })}
           </div>
           <CopyButton text={content} />
 
@@ -267,10 +283,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 28 28" width="22" height="22">
-              <rect x="4" y="15" width="16" height="7" rx="1.5" transform="rotate(-18 4 15)" fill="var(--amber)" />
-              <rect x="15" y="4" width="6" height="14" rx="1.5" transform="rotate(-18 15 4)" fill="var(--ink-elevated)" stroke="var(--amber)" strokeWidth="1.2" />
-            </svg>
+            <BrandMark size={30} />
           </span>
           <div className="brand-text">
             <span className="brand-name">DocQA</span>
@@ -378,7 +391,9 @@ export default function App() {
           {asking && (
             <div className="msg msg-assistant">
               <div className="msg-row">
-                <div className="avatar avatar-assistant">§</div>
+                <div className="avatar avatar-assistant">
+                  <BrandMark size={26} />
+                </div>
                 <div className="msg-bubble msg-bubble-assistant msg-thinking">
                   <span className="dot" />
                   <span className="dot" />
@@ -400,7 +415,7 @@ export default function App() {
             disabled={documents.length === 0}
           />
           <button type="submit" className="send-btn" disabled={!input.trim() || asking} title="Ask">
-            {Icon.send}
+            {Icon.launch}
           </button>
         </form>
       </main>

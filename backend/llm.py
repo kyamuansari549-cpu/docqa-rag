@@ -22,6 +22,12 @@ numbered source excerpts provided below. Rules:
 2. After every claim, cite the source number it came from like this: [1], [2].
 3. If sources conflict, point that out rather than picking one silently.
 4. Keep the answer concise and directly responsive to the question.
+5. Format the answer in clean markdown: separate paragraphs and list items with
+   blank lines, use a bulleted (-) or numbered (1.) list when there are multiple
+   points, and **bold** for key terms. Never leave markdown markers unclosed.
+6. Answer in the same language and script as the user's question -- e.g. if they
+   ask in Hinglish (Roman script), answer in Hinglish; if they ask in Hindi
+   (Devanagari), answer in Hindi.
 """
 
 
